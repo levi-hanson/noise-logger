@@ -244,7 +244,15 @@ async function start() {
     ctx.createMediaStreamSource(stream).connect(node); node.connect(mute); mute.connect(ctx.destination);
     node.port.onmessage = e => onFrame(e.data);
     stream.getAudioTracks()[0].onended = () => { stop(); showErr('The microphone was disconnected.'); };
-    await ctx.resume();
+    // Without a click the browser may hold the audio engine paused; don't wait on it forever.
+    ctx.resume().catch(() => {});
+    if (ctx.state !== 'running') await new Promise(r => setTimeout(r, 400));
+    const c = ctx;
+    if (c.state !== 'running') {
+      showErr('Click anywhere on this page to begin logging.');
+      c.onstatechange = () => { if (c.state === 'running' && ctx === c) showErr(''); };
+      document.addEventListener('click', () => { if (ctx === c) c.resume().catch(() => {}); }, { once: true });
+    }
   } catch (e) {
     cleanup();
     showErr(e && e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site and try again.'
@@ -538,6 +546,7 @@ for (const id in FIELDS) {
   $('date').value = today; $('date').max = today;
   $('toggle').disabled = false;
   render();
+  start();   // begin logging as soon as the page opens
 })();
 </script>
 </body>
