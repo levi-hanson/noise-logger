@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noise Logger</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --fg: #1b1f24; --muted: #68717d; --grid: #e3e6ea;
+    --line: #2563eb; --max: #9db8f2; --ev: #dc2626; --evfill: rgba(220,38,38,.16); --bar: #2563eb; --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --card: #1a1e24; --fg: #e8eaed; --muted: #98a1ad; --grid: #2b313a;
+      --line: #6ea0ff; --max: #3d5a94; --ev: #f87171; --evfill: rgba(248,113,113,.2); --bar: #6ea0ff; --ok: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; flex: 1; }
+  h2 { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
+  .card { background: var(--card); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  button, input, select { font: inherit; color: inherit; }
+  button { border: 1px solid var(--grid); background: var(--card); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  #toggle { background: var(--line); color: #fff; border-color: transparent; font-weight: 600; min-width: 96px; }
+  #toggle.on { background: var(--ev); }
+  input[type=number], input[type=date] { background: var(--bg); border: 1px solid var(--grid); border-radius: 6px; padding: 5px 8px; }
+  input[type=number] { width: 84px; }
+  #status { color: var(--muted); font-size: 13px; }
+  .live { display: flex; align-items: baseline; gap: 10px; }
+  #level { font-size: 54px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+  .unit { color: var(--muted); }
+  #meter { position: relative; height: 12px; background: var(--grid); border-radius: 6px; margin-top: 12px; overflow: hidden; }
+  #fill { height: 100%; width: 0; background: var(--ok); border-radius: 6px; }
+  #fill.loud { background: var(--ev); }
+  #mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); display: none; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px; margin-bottom: 14px; }
+  .tile { background: var(--card); border-radius: 10px; padding: 12px 16px; }
+  .tile b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: 13px; }
+  canvas { display: block; width: 100%; }
+  #dayChart { height: 260px; }
+  #leqChart, #cntChart { height: 170px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .two { grid-template-columns: 1fr; } }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin: 0 4px 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 5px 8px 5px 0; border-bottom: 1px solid var(--grid); font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  #evWrap { max-height: 260px; overflow: auto; }
+  .settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 18px; }
+  .settings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  #err { color: var(--ev); font-size: 14px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Noise Logger</h1>
+    <span id="status">Stopped</span>
+    <button id="toggle" disabled>Start</button>
+  </header>
+
+  <div class="card">
+    <div class="live"><span id="level">--</span><span class="unit">dB (approx.)</span></div>
+    <div id="meter"><div id="fill"></div><div id="mark" title="Loud-event threshold"></div></div>
+    <div id="err"></div>
+  </div>
+
+  <div class="row" style="margin-bottom:14px">
+    <label for="date">Day</label>
+    <input type="date" id="date">
+    <button id="todayBtn">Today</button>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><b id="tLeq">--</b><span>Leq (energy average), dB</span></div>
+    <div class="tile"><b id="tEv">0</b><span>Loud events</span></div>
+    <div class="tile"><b id="tPeak">--</b><span>Loudest moment, dB</span></div>
+    <div class="tile"><b id="tTime">0m</b><span>Time logged</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Level over the day</h2>
+    <canvas id="dayChart"></canvas>
+    <div class="legend"><span class="sw" style="background:var(--line);margin-left:0"></span>average per minute
+      <span class="sw" style="background:var(--max)"></span>max per minute
+      <span class="sw" style="background:var(--ev);height:10px;opacity:.5"></span>loud event</div>
+  </div>
+
+  <div class="two">
+    <div class="card"><h2>Leq by hour (dB)</h2><canvas id="leqChart"></canvas></div>
+    <div class="card"><h2>Loud events by hour</h2><canvas id="cntChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2>Loud events</h2>
+    <div id="evWrap"><table><thead><tr><th>Start</th><th>End</th><th>Duration</th><th>Peak dB</th><th>Above baseline</th></tr></thead><tbody id="evBody"></tbody></table></div>
+    <p class="note" id="evNone">No loud events on this day.</p>
+  </div>
+
+  <div class="card">
+    <h2>Export this day</h2>
+    <div class="row">
+      <button id="xLevels">Levels CSV</button>
+      <button id="xEvents">Events CSV</button>
+      <button id="xPng">Summary PNG</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Settings</h2>
+    <div class="settings">
+      <label>dB offset <input type="number" id="sOffset" step="1"></label>
+      <label>Event margin (dB) <input type="number" id="sMargin" step="1" min="1"></label>
+      <label>Min. duration (s) <input type="number" id="sMinDur" step="0.1" min="0.1"></label>
+      <label>Merge gap (s) <input type="number" id="sGap" step="0.5" min="0"></label>
+      <label>Baseline window (min) <input type="number" id="sBase" step="1" min="1"></label>
+    </div>
+    <p class="note">The offset is added to the mic's raw level to approximate real-world dB. Compare against a phone sound-meter app and adjust; it re-scales all stored days. A loud event is a level above the rolling median by the margin, for at least the minimum duration.</p>
+  </div>
+
+  <p class="note">Levels only: the microphone signal is reduced to one loudness number every 100 ms inside the browser. No audio is saved or sent anywhere. The numbers are stored only in this browser on this computer. Keep this tab open and the laptop awake while logging.</p>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const FLOOR = -100;               // dBFS used for digital silence
+const DEF = { offset: 90, margin: 12, minDur: 0.5, gap: 3, baseMin: 10 };
+let S = Object.assign({}, DEF);
+try { Object.assign(S, JSON.parse(localStorage.getItem('noise-settings') || '{}')); } catch (e) {}
+
+/* ---------- storage (IndexedDB): numbers only ---------- */
+let dbp;
+function db() {
+  return dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('noise-logger', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('levels'); r.result.createObjectStore('events'); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }));
+}
+async function idb(store, mode, fn) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const tx = d.transaction(store, mode);
+    const rq = fn(tx.objectStore(store));
+    tx.oncomplete = () => res(rq && rq.result);
+    tx.onerror = tx.onabort = () => rej(tx.error);
+  });
+}
+
+/* ---------- day model ---------- */
+const pad = n => String(n).padStart(2, '0');
+const dateStr = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+function newDay(date) {
+  return { date, hours: Array.from({ length: 24 }, () => []), events: [],
+    minE: new Float64Array(1440), minN: new Uint16Array(1440), minMax: new Float32Array(1440).fill(-Infinity) };
+}
+// One row per second: s = second of day, a/m = avg/max dBFS x10
+function addRow(day, s, a, m) {
+  day.hours[Math.floor(s / 3600)].push(s, a, m);
+  const i = Math.floor(s / 60);
+  day.minE[i] += Math.pow(10, a / 100); day.minN[i]++;
+  if (m / 10 > day.minMax[i]) day.minMax[i] = m / 10;
+}
+async function loadDay(date) {
+  const day = newDay(date);
+  try {
+    const chunks = await idb('levels', 'readonly', st => st.getAll(IDBKeyRange.bound(date + '|00', date + '|23')));
+    for (const c of chunks || []) for (let i = 0; i < c.d.length; i += 3) addRow(day, c.d[i], c.d[i + 1], c.d[i + 2]);
+    day.events = (await idb('events', 'readonly', st => st.get(date))) || [];
+  } catch (e) { showErr('Could not read stored data: ' + e); }
+  return day;
+}
+const dirty = new Set();
+async function flush() {
+  if (!live || !dirty.size) return;
+  const day = live, hrs = [...dirty]; dirty.clear();
+  try {
+    await idb('levels', 'readwrite', st => { for (const h of hrs) st.put({ h, d: day.hours[h] }, day.date + '|' + pad(h)); });
+  } catch (e) { showErr('Could not save: ' + e); }
+}
+function saveEvents(day) { idb('events', 'readwrite', st => st.put(day.events, day.date)).catch(e => showErr('Could not save: ' + e)); }
+
+function stats(day) {
+  let E = 0, N = 0, pk = -Infinity;
+  for (let i = 0; i < 1440; i++) { E += day.minE[i]; N += day.minN[i]; if (day.minMax[i] > pk) pk = day.minMax[i]; }
+  return { n: N, leq: N ? 10 * Math.log10(E / N) + S.offset : null, peak: N ? pk + S.offset : null };
+}
+function hourly(day) {
+  const leq = new Array(24).fill(null), cnt = new Array(24).fill(0);
+  for (let h = 0; h < 24; h++) {
+    let E = 0, N = 0;
+    for (let i = h * 60; i < h * 60 + 60; i++) { E += day.minE[i]; N += day.minN[i]; }
+    if (N) leq[h] = 10 * Math.log10(E / N) + S.offset;
+  }
+  for (const e of day.events) cnt[new Date(e.s).getHours()]++;
+  return { leq, cnt };
+}
+function hourSpan(day) {
+  let f = -1, l = -1;
+  for (let i = 0; i < 1440; i++) if (day.minN[i]) { if (f < 0) f = i; l = i; }
+  return f < 0 ? null : [Math.floor(f / 60), Math.floor(l / 60) + 1];
+}
+
+/* ---------- microphone -> level ---------- */
+// Runs on the audio thread, so it keeps going when the tab is in the background.
+// It only ever passes out the mean square of each 100 ms block, never samples.
+const WORKLET = `class Meter extends AudioWorkletProcessor {
+  constructor() { super(); this.s = 0; this.n = 0; this.N = Math.round(sampleRate / 10); }
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (ch) {
+      for (let i = 0; i < ch.length; i++) this.s += ch[i] * ch[i];
+      this.n += ch.length;
+      if (this.n >= this.N) { this.port.postMessage(this.s / this.n); this.s = 0; this.n = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('meter', Meter);`;
+
+let live = null, view = null;       // today's data, and the day on screen
+let running = false, ctx = null, stream = null, wake = null, flushTimer = null;
+let acc = null, recent = [], baseline = null, cand = null, ev = null;
+
+async function start() {
+  showErr('');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
+    const node = new AudioWorkletNode(ctx, 'meter');
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    ctx.createMediaStreamSource(stream).connect(node); node.connect(mute); mute.connect(ctx.destination);
+    node.port.onmessage = e => onFrame(e.data);
+    stream.getAudioTracks()[0].onended = () => { stop(); showErr('The microphone was disconnected.'); };
+    await ctx.resume();
+  } catch (e) {
+    cleanup();
+    showErr(e && e.name === 'NotAllowedError' ? 'Microphone access was blocked. Allow it for this site and try again.'
+      : !navigator.mediaDevices ? 'This page needs HTTPS (or localhost) to use the microphone.' : 'Could not start: ' + (e.message || e));
+    return;
+  }
+  running = true; acc = null; recent = []; baseline = null; cand = null; ev = null;
+  flushTimer = setInterval(flush, 10000);
+  getWake();
+  $('toggle').textContent = 'Stop'; $('toggle').classList.add('on');
+  setStatus();
+}
+function cleanup() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (ctx) ctx.close().catch(() => {});
+  stream = ctx = null;
+}
+function stop() {
+  if (!running) return;
+  running = false;
+  cleanup();
+  if (acc && acc.n) finalize(acc);
+  acc = null;
+  if (ev) closeEvent();
+  cand = null;
+  clearInterval(flushTimer); flush();
+  if (wake) { wake.release().catch(() => {}); wake = null; }
+  $('toggle').textContent = 'Start'; $('toggle').classList.remove('on');
+  $('level').textContent = '--'; $('fill').style.width = '0'; $('mark').style.display = 'none';
+  setStatus(); render();
+}
+async function getWake() {
+  try { if (running && 'wakeLock' in navigator && !document.hidden) wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { getWake(); render(); } });
+addEventListener('pagehide', flush);
+
+function onFrame(ms) {
+  if (!running) return;
+  const now = Date.now(), sec = Math.floor(now / 1000);
+  const dbfs = ms > 1e-10 ? 10 * Math.log10(ms) : FLOOR;
+  if (!acc || acc.sec !== sec) {
+    if (acc && acc.n) finalize(acc);
+    acc = { sec, e: 0, n: 0, max: -Infinity };
+  }
+  acc.e += ms; acc.n++; if (dbfs > acc.max) acc.max = dbfs;
+  detect(now, dbfs);
+  if (!document.hidden) {
+    $('level').textContent = (dbfs + S.offset).toFixed(0);
+    const pct = v => Math.max(0, Math.min(100, (v + 90) / 90 * 100));
+    $('fill').style.width = pct(dbfs) + '%';
+    $('fill').classList.toggle('loud', baseline != null && dbfs > baseline + S.margin);
+    $('mark').style.display = baseline == null ? 'none' : 'block';
+    if (baseline != null) $('mark').style.left = pct(baseline + S.margin) + '%';
+  }
+}
+
+function finalize(a) {
+  const d = new Date(a.sec * 1000), date = dateStr(d);
+  if (date !== live.date) rollover(date);
+  const avg = a.e / a.n > 1e-10 ? 10 * Math.log10(a.e / a.n) : FLOOR;
+  const s = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+  addRow(live, s, Math.round(avg * 10), Math.round(a.max * 10));
+  dirty.add(d.getHours());
+  recent.push(avg);
+  const cap = Math.max(60, Math.round(S.baseMin * 60));
+  if (recent.length > cap) recent.splice(0, recent.length - cap);
+  if (recent.length >= 30) { const srt = recent.slice().sort((x, y) => x - y); baseline = srt[srt.length >> 1]; }
+  setStatus();
+  if (view === live && !document.hidden) render();
+}
+function rollover(date) {
+  if (ev) closeEvent();
+  flush();
+  const wasView = view === live;
+  live = newDay(date);
+  if (wasView) { view = live; $('date').value = date; }
+}
+
+// Loud event: above baseline + margin for >= minDur; quiet gaps shorter than `gap` are merged in.
+function detect(now, dbfs) {
+  if (baseline == null) return;
+  const loud = dbfs > baseline + S.margin;
+  if (ev) {
+    if (loud) { ev.e = now; if (dbfs > ev.p) ev.p = dbfs; }
+    else if (now - ev.e > S.gap * 1000) closeEvent();
+  } else if (loud) {
+    if (!cand) cand = { s: now - 100, p: dbfs, b: baseline };
+    else if (dbfs > cand.p) cand.p = dbfs;
+    if (now - cand.s >= S.minDur * 1000) { ev = { s: cand.s, e: now, p: cand.p, b: cand.b }; cand = null; }
+  } else cand = null;
+}
+function closeEvent() {
+  const r1 = v => Math.round(v * 10) / 10;
+  live.events.push({ s: ev.s, e: ev.e, p: r1(ev.p), o: r1(ev.p - ev.b) });
+  ev = null;
+  saveEvents(live);
+}
+
+/* ---------- rendering ---------- */
+function showErr(m) { $('err').textContent = m; }
+function setStatus() {
+  $('status').textContent = !running ? 'Stopped'
+    : baseline == null ? 'Logging: learning the baseline (' + Math.max(0, 30 - recent.length) + ' s)'
+    : 'Logging: baseline ' + (baseline + S.offset).toFixed(0) + ' dB' + (ev ? ', loud event now' : '');
+}
+const fmtT = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+const fmtDur = n => n >= 3600 ? Math.floor(n / 3600) + 'h ' + Math.floor(n % 3600 / 60) + 'm' : n >= 60 ? Math.floor(n / 60) + 'm' : n + 's';
+const hourLbl = h => (h % 12 || 12) + (h % 24 < 12 ? 'am' : 'pm');
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function theme() {
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+  return { fg: v('--fg'), muted: v('--muted'), grid: v('--grid'), line: v('--line'), max: v('--max'), ev: v('--evfill'), bar: v('--bar'), evbar: v('--ev') };
+}
+const LIGHT = { fg: '#1b1f24', muted: '#68717d', grid: '#e3e6ea', line: '#2563eb', max: '#9db8f2', ev: 'rgba(220,38,38,.16)', bar: '#2563eb', evbar: '#dc2626' };
+
+function prep(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [c, r.width, r.height];
+}
+
+function drawDay(c, W, H, day, th) {
+  const L = 38, R = 10, T = 8, B = 22, w = W - L - R, h = H - T - B;
+  c.font = '11px system-ui, sans-serif'; c.textBaseline = 'middle';
+  const sp = hourSpan(day);
+  if (!sp) { c.fillStyle = th.muted; c.textAlign = 'center'; c.fillText('No data for this day yet', W / 2, H / 2); return; }
+  const [h0, h1] = sp, m0 = h0 * 60, m1 = h1 * 60;
+  const avg = [], mx = []; let lo = Infinity, hi = -Infinity;
+  for (let i = m0; i < m1; i++) {
+    if (!day.minN[i]) { avg.push(null); mx.push(null); continue; }
+    const a = 10 * Math.log10(day.minE[i] / day.minN[i]) + S.offset, m = day.minMax[i] + S.offset;
+    avg.push(a); mx.push(m); if (a < lo) lo = a; if (m > hi) hi = m;
+  }
+  lo = Math.floor((lo - 3) / 10) * 10; hi = Math.ceil((hi + 3) / 10) * 10; if (hi - lo < 20) hi = lo + 20;
+  const X = min => L + (min - m0) / (m1 - m0) * w, Y = v => T + (hi - v) / (hi - lo) * h;
+  // grid
+  c.strokeStyle = th.grid; c.fillStyle = th.muted; c.lineWidth = 1;
+  const ys = hi - lo > 60 ? 20 : 10;
+  c.textAlign = 'right';
+  for (let v = lo; v <= hi; v += ys) { c.beginPath(); c.moveTo(L, Y(v) + .5); c.lineTo(L + w, Y(v) + .5); c.stroke(); c.fillText(v, L - 6, Y(v)); }
+  c.textAlign = 'center';
+  const xs = Math.ceil((h1 - h0) / Math.max(2, Math.floor(w / 55)));
+  for (let hr = h0; hr <= h1; hr += xs) c.fillText(hourLbl(hr), X(hr * 60), H - B / 2 + 2);
+  // events
+  c.fillStyle = th.ev;
+  const dayStart = new Date(day.date + 'T00:00:00').getTime();
+  const evs = day === live && ev ? day.events.concat([ev]) : day.events;
+  for (const e of evs) {
+    const x1 = X((e.s - dayStart) / 60000), x2 = X((e.e - dayStart) / 60000);
+    c.fillRect(x1, T, Math.max(2, x2 - x1), h);
+  }
+  // lines
+  const path = (arr, col, lw) => {
+    c.strokeStyle = col; c.lineWidth = lw; c.lineJoin = 'round'; c.beginPath();
+    let pen = false, lone = [];
+    arr.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      const x = X(m0 + i + .5), y = Y(v);
+      if (pen) c.lineTo(x, y); else { c.moveTo(x, y); if (arr[i + 1] == null) lone.push([x, y]); }
+      pen = true;
+    });
+    c.stroke();
+    c.fillStyle = col; for (const [x, y] of lone) { c.beginPath(); c.arc(x, y, lw + .5, 0, 7); c.fill(); }
+  };
+  path(mx, th.max, 1); path(avg, th.line, 2);
+}
+
+function drawBars(c, W, H, vals, h0, h1, th, col, isDb) {
+  const L = 8, R = 8, T = 18, B = 22, w = W - L - R, h = H - T - B;
+  c.font = '11px system-ui, sans-serif'; c.textBaseline = 'middle'; c.textAlign = 'center';
+  const sub = vals.slice(h0, h1), nums = sub.filter(v => v != null);
+  if (!nums.length) { c.fillStyle = th.muted; c.fillText('No data', W / 2, H / 2); return; }
+  let lo = 0, hi = Math.max(1, ...nums);
+  if (isDb) { lo = Math.floor((Math.min(...nums) - 10) / 10) * 10; hi = Math.max(...nums) + 1; }
+  const bw = w / sub.length, lblEvery = Math.ceil(sub.length / Math.max(2, Math.floor(w / 40)));
+  c.strokeStyle = th.grid; c.beginPath(); c.moveTo(L, T + h + .5); c.lineTo(L + w, T + h + .5); c.stroke();
+  sub.forEach((v, i) => {
+    const x = L + i * bw;
+    c.fillStyle = th.muted;
+    if (i % lblEvery === 0) c.fillText(hourLbl(h0 + i), x + bw / 2, H - B / 2 + 2);
+    if (v == null || (!isDb && v === 0)) return;
+    const bh = Math.max(2, (v - lo) / (hi - lo) * h), g = Math.min(4, bw * .15);
+    c.fillStyle = col; c.fillRect(x + g, T + h - bh, bw - 2 * g, bh);
+    if (bw >= 22) { c.fillStyle = th.fg; c.fillText(isDb ? v.toFixed(0) : v, x + bw / 2, T + h - bh - 8); }
+  });
+}
+
+function render() {
+  if (!view) return;
+  const st = stats(view), th = theme(), sp = hourSpan(view) || [8, 18], hr = hourly(view);
+  $('tLeq').textContent = st.leq == null ? '--' : st.leq.toFixed(1);
+  $('tEv').textContent = view.events.length + (view === live && ev ? 1 : 0);
+  $('tPeak').textContent = st.peak == null ? '--' : st.peak.toFixed(0);
+  $('tTime').textContent = fmtDur(st.n);
+  let a = prep($('dayChart')); drawDay(a[0], a[1], a[2], view, th);
+  a = prep($('leqChart')); drawBars(a[0], a[1], a[2], hr.leq, sp[0], sp[1], th, th.bar, true);
+  a = prep($('cntChart')); drawBars(a[0], a[1], a[2], hr.cnt, sp[0], sp[1], th, th.evbar, false);
+  const key = view.date + ':' + view.events.length + ':' + S.offset;
+  if (render.key !== key) {
+    render.key = key;
+    $('evBody').innerHTML = view.events.slice().reverse().slice(0, 300).map(e =>
+      '<tr><td>' + esc(fmtT(e.s)) + '</td><td>' + esc(fmtT(e.e)) + '</td><td>' + ((e.e - e.s) / 1000).toFixed(1) + ' s</td><td>' +
+      (e.p + S.offset).toFixed(0) + '</td><td>+' + e.o.toFixed(0) + ' dB</td></tr>').join('');
+    $('evNone').style.display = view.events.length ? 'none' : '';
+  }
+}
+addEventListener('resize', render);
+if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
+
+/* ---------- export ---------- */
+function download(name, blob) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function levelsCsv(day) {
+  const out = ['timestamp,avg_db,max_db'];
+  for (const hrs of day.hours) for (let i = 0; i < hrs.length; i += 3) {
+    const s = hrs[i];
+    out.push(day.date + ' ' + pad(Math.floor(s / 3600)) + ':' + pad(Math.floor(s % 3600 / 60)) + ':' + pad(s % 60) + ',' +
+      (hrs[i + 1] / 10 + S.offset).toFixed(1) + ',' + (hrs[i + 2] / 10 + S.offset).toFixed(1));
+  }
+  return out.join('\n') + '\n';
+}
+function eventsCsv(day) {
+  const ts = ms => { const d = new Date(ms); return dateStr(d) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + Math.floor(d.getMilliseconds() / 100); };
+  return ['start,end,duration_s,peak_db,db_above_baseline'].concat(day.events.map(e =>
+    [ts(e.s), ts(e.e), ((e.e - e.s) / 1000).toFixed(1), (e.p + S.offset).toFixed(1), e.o.toFixed(1)].join(','))).join('\n') + '\n';
+}
+function summaryPng(day) {
+  const W = 1240, H = 1754, M = 70, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const c = cv.getContext('2d'), th = LIGHT, st = stats(day), hr = hourly(day), sp = hourSpan(day) || [8, 18];
+  c.fillStyle = '#fff'; c.fillRect(0, 0, W, H);
+  c.fillStyle = th.fg; c.textBaseline = 'alphabetic'; c.textAlign = 'left';
+  c.font = '600 40px system-ui, sans-serif'; c.fillText('Office noise summary', M, 100);
+  c.font = '22px system-ui, sans-serif'; c.fillStyle = th.muted;
+  c.fillText(new Date(day.date + 'T12:00:00').toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }), M, 140);
+  const tiles = [[st.leq == null ? '--' : st.leq.toFixed(1) + ' dB', 'Leq (energy average)'], [String(day.events.length), 'Loud events'],
+    [st.peak == null ? '--' : st.peak.toFixed(0) + ' dB', 'Loudest moment'], [fmtDur(st.n), 'Time logged']];
+  tiles.forEach((t, i) => {
+    const x = M + i * (W - 2 * M) / 4;
+    c.fillStyle = th.fg; c.font = '600 38px system-ui, sans-serif'; c.fillText(t[0], x, 230);
+    c.fillStyle = th.muted; c.font = '18px system-ui, sans-serif'; c.fillText(t[1], x, 260);
+  });
+  const section = (title, y, h, fn) => {
+    c.textBaseline = 'alphabetic'; c.textAlign = 'left'; c.fillStyle = th.fg; c.font = '600 22px system-ui, sans-serif'; c.fillText(title, M, y);
+    c.save(); c.translate(M, y + 14); c.scale(1.6, 1.6); fn((W - 2 * M) / 1.6, h / 1.6); c.restore();
+  };
+  section('Level over the day (per-minute average and max, loud events shaded)', 340, 430, (w, h) => drawDay(c, w, h, day, th));
+  section('Leq by hour (dB)', 850, 280, (w, h) => drawBars(c, w, h, hr.leq, sp[0], sp[1], th, th.bar, true));
+  section('Loud events by hour', 1200, 280, (w, h) => drawBars(c, w, h, hr.cnt, sp[0], sp[1], th, th.evbar, false));
+  c.textBaseline = 'alphabetic'; c.textAlign = 'left';
+  const top = day.events.slice().sort((a, b) => b.p - a.p).slice(0, 3);
+  c.fillStyle = th.fg; c.font = '18px system-ui, sans-serif';
+  if (top.length) c.fillText('Loudest events: ' + top.map(e => fmtT(e.s) + ' (' + (e.p + S.offset).toFixed(0) + ' dB, ' + ((e.e - e.s) / 1000).toFixed(0) + ' s)').join('   '), M, 1570);
+  c.fillStyle = th.muted; c.font = '16px system-ui, sans-serif';
+  c.fillText('Approximate levels from a laptop microphone (offset ' + (S.offset >= 0 ? '+' : '') + S.offset + ' dB). Good for comparing times of day, not calibrated.', M, 1640);
+  c.fillText('Loud event: at least ' + S.margin + ' dB above the ' + S.baseMin + '-minute median for ' + S.minDur + ' s or more. No audio was recorded, only loudness numbers.', M, 1666);
+  return new Promise(res => cv.toBlob(res, 'image/png'));
+}
+$('xLevels').onclick = () => download('noise-levels-' + view.date + '.csv', new Blob([levelsCsv(view)], { type: 'text/csv' }));
+$('xEvents').onclick = () => download('noise-events-' + view.date + '.csv', new Blob([eventsCsv(view)], { type: 'text/csv' }));
+$('xPng').onclick = async () => download('noise-summary-' + view.date + '.png', await summaryPng(view));
+
+/* ---------- controls ---------- */
+$('toggle').onclick = () => running ? stop() : start();
+async function showDate(date) {
+  if (!date) return;
+  $('date').value = date;
+  view = live && date === live.date ? live : await loadDay(date);
+  render();
+}
+$('date').onchange = e => showDate(e.target.value);
+$('todayBtn').onclick = () => showDate(live.date);
+const FIELDS = { sOffset: 'offset', sMargin: 'margin', sMinDur: 'minDur', sGap: 'gap', sBase: 'baseMin' };
+for (const id in FIELDS) {
+  $(id).value = S[FIELDS[id]];
+  $(id).onchange = () => {
+    const v = parseFloat($(id).value), k = FIELDS[id];
+    if (!isFinite(v) || (k !== 'offset' && v < 0) || ((k === 'margin' || k === 'baseMin' || k === 'minDur') && v <= 0)) { $(id).value = S[k]; return; }
+    S[k] = v;
+    try { localStorage.setItem('noise-settings', JSON.stringify(S)); } catch (e) {}
+    setStatus(); render();
+  };
+}
+(async function init() {
+  const today = dateStr(new Date());
+  live = await loadDay(today); view = live;
+  $('date').value = today; $('date').max = today;
+  $('toggle').disabled = false;
+  render();
+})();
+</script>
+</body>
+</html>
